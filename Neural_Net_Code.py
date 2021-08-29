@@ -48,9 +48,18 @@ def data_prep(df):
     return df
     
 def build_model(df):
-    
+    n = len(df)
+    train_df = df[0:int(n*0.7)]
+    val_df = df[int(n*0.7):int(n*0.9)]
+    test_df = df[int(n*0.9):0]
+    num_features = df.shape[1]
+    train_mean = train_df.mean()
+    train_std = train_df.std()
 
-
+    train_df = (train_df - train_mean) / train_std
+    val_df = (val_df - train_mean) / train_std
+    test_df = (test_df - train_mean) / train_std
+ 
     
 if __name__ == '__main__':
     main()
