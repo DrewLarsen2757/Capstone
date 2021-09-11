@@ -1,9 +1,11 @@
 import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers
+from tensorflow.keras import layers, Sequential, callbacks
+from tensorflow.keras.layers import Dense, LSTM, Dropout
 import numpy as np
 import time
+from sklearn.preprocessing import MinMaxScaler
 start_time = time.time()
 
 
@@ -12,12 +14,12 @@ def main():
     df = pd.read_csv('Full_Data.csv', parse_dates = ['DAY'])
     days_back = 7
     days_forward = 30
-    year_back = False
+    train = .7
+    year_back = True
 
 #################################################
     clean_df = data_clean(df)
-    X, y = data_prep(clean_df, days_back, days_forward, year_back)
-    build_model(X, y, days_back, days_forward, year_back)
+    build_model(clean_df, days_back, days_forward, year_back, train = .7)
     
 def data_clean(df):
     # Remove columns with PGTM, WDF5, WSF5, TAVG. 
@@ -46,7 +48,7 @@ def data_clean(df):
     # AWND also has a small number of NAs for each zone (1 or 2 for each zone).
     # These were addressed in the excel file by taking the average of the value
     # before and after for TMIN and TMAX. The one missing precip day was assumed
-    # to have 0 precip.
+    # to have 0 preci, index_col=['DAY']p.
     for x in list(df):
         print(x, df[x].isna().sum())
     df = df.fillna(0)
@@ -72,6 +74,7 @@ def data_prep(df, days_back = 7, days_forward = 30, year_back = True):
     """
     X, y = list(), list()
     n = range(366 + days_back, len(df))
+
     if year_back == True:
         for window_start in n:
             LY_window_start = window_start - 365
@@ -86,7 +89,7 @@ def data_prep(df, days_back = 7, days_forward = 30, year_back = True):
             past = LY_window.append(TY_past)
             future = df[past_end:future_end]
             X.append(past)
-            y.append(future)
+            y.append(future['TOTAL_LOAD'])
 
     else:
         for window_start in range(len(df)):
@@ -102,28 +105,65 @@ def data_prep(df, days_back = 7, days_forward = 30, year_back = True):
             if window_start < 5 or window_start > (len(df) - 35):
                 print(past)
                 print(future)
-
-            
-    return np.array(X), np.array(y)
     
-def build_model(df, days_back = 7, days_forward = 30, year_back = True):
-    if year_back == True:
-        num_input = days_back * 2
-    else:
-        num_input = days_back
-    num_output = days_forward
-    n = len(df)
-    train_df = df[0:int(n*0.7)]
-    val_df = df[int(n*0.7):int(n*0.9)]
-    test_df = df[int(n*0.9):0]
-    num_features = df.shape[1]
-    train_mean = train_df.mean()
-    train_std = train_df.std()
+    
+            
+    return np.array(X).astype('float32'), np.array(y).astype('float32')
+    
+def build_model(df, days_back = 7, days_forward = 30, year_back = True, train = .7):
+    # test train splits
+    df = df.drop(columns = ['DAY'])
+    df = df.replace(',', '', regex = True)
+    df_train = df[0:round(len(df)*.7)]
+    df_test = df[round(len(df)*.7):len(df)]
+    scaler = MinMaxScaler(feature_range=(0,1))
+    scaler_y = MinMaxScaler(feature_range=(0,1))
+    trained_scaler = scaler.fit(df_train)
+    trained_scaler_y = scaler_y.fit(np.asarray(df_train['TOTAL_LOAD']).reshape(-1,1))
 
-    train_df = (train_df - train_mean) / train_std
-    val_df = (val_df - train_mean) / train_std
-    test_df = (test_df - train_mean) / train_std
- 
+    train_norm = trained_scaler.transform(df_train)
+    test_norm = trained_scaler.transform(df_test)
+
+    df_norm_train = pd.DataFrame(train_norm, columns = list(df_train))
+    df_norm_test = pd.DataFrame(test_norm, columns = list(df_train))
+    
+
+    X_train, y_train = data_prep(df_norm_train, days_back, days_forward, year_back)
+    X_test, y_test = data_prep(df_norm_test, days_back, days_forward, year_back)
+
+
+    model = Sequential()
+    model.add(LSTM(units = 200, activation = 'relu',
+                input_shape = (X_train.shape[1], X_train.shape[2])))
+    model.add(Dropout(0.2))
+    model.add(Dense(units = 100, activation = 'relu'))
+    model.add(Dropout(0.2))
+    model.add(Dense(days_forward))
+    #Compile model
+    model.compile(loss='mse', optimizer='adam')
+    early_stop = keras.callbacks.EarlyStopping(monitor = 'loss',
+                                               patience = 10)
+    fit_model = model.fit(X_train, y_train, epochs = 10000,  
+                        batch_size = 16, 
+                        shuffle = False, callbacks = [early_stop])    
+    
+    prediction = model.predict(X_test)
+    prediction = trained_scaler_y.inverse_transform(prediction)
+    actual = trained_scaler_y.inverse_transform(y_test)
+    evaluate_prediction(prediction, actual, 'LSTM')
+
+    print('done')
+
+def evaluate_prediction(predictions, actual, model_name):
+    errors = predictions - actual
+    mse = np.square(errors).mean()
+    rmse = np.sqrt(mse)
+    mae = np.abs(errors).mean()
+    print(model_name + ':')
+    print('Mean Absolute Error: {:.4f}'.format(mae))
+    print('Mean Square Error: {:.4f}'.format(mse))
+    print('')
+
     
 if __name__ == '__main__':
     main()
