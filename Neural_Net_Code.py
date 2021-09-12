@@ -15,9 +15,10 @@ def main():
     days_back = 7
     days_forward = 30
     train = .7
-    year_back = True
+    year_back = False
 
 #################################################
+    # control for functions
     clean_df = data_clean(df)
     build_model(clean_df, days_back, days_forward, year_back, train = .7)
     
@@ -59,7 +60,7 @@ def data_clean(df):
     return df
 
 def data_prep(df, days_back = 7, days_forward = 30, year_back = True):
-    """[summary]
+    """windowing function
 
     Args:
         df (pandas dataframe): Output from data clean function
@@ -74,7 +75,13 @@ def data_prep(df, days_back = 7, days_forward = 30, year_back = True):
     """
     X, y = list(), list()
     n = range(366 + days_back, len(df))
-
+    # window generator. Splits data into inputs and outputs. 
+    # inputs: Takes the amount of days back and if year_back is true, 
+    # takes the amount of days back last year and turns them into an
+    # input for a single day.
+    # outputs: each input is tied to an output that is days_forward 
+    # long. The default is 30 days, so each input by default predicts
+    # 30 days worth of data.
     if year_back == True:
         for window_start in n:
             LY_window_start = window_start - 365
@@ -98,40 +105,52 @@ def data_prep(df, days_back = 7, days_forward = 30, year_back = True):
             if future_end > len(df):
                 break
         # slicing the past and future parts of the window
-            past = df[window_start:past_end] 
+            past = df[window_start:past_end]
             future = df[past_end:future_end]
             X.append(past)
-            y.append(future)
-            if window_start < 5 or window_start > (len(df) - 35):
-                print(past)
-                print(future)
+            y.append(future['TOTAL_LOAD'])
     
     
             
     return np.array(X).astype('float32'), np.array(y).astype('float32')
     
 def build_model(df, days_back = 7, days_forward = 30, year_back = True, train = .7):
-    # test train splits
+    """This function finishes preprocessing, scales the data, builds the model and 
+    outputs model performance metrics.
+
+    Args:
+        df (dataframe): Cleaned dataframe ready for windowing. Output from data clean
+        days_back (int, optional): Number of days to be used as input. Defaults to 7.
+        days_forward (int, optional): Number of days to predict. Defaults to 30.
+        year_back (bool, optional): If True, takes data from last year in as input as well. 
+        Defaults to True.
+        train (float, optional): Create train / test split. Defaults to .7.
+    """
+    
+    
+    # Finish data preprocessing prior to windowing
     df = df.drop(columns = ['DAY'])
     df = df.replace(',', '', regex = True)
-    df_train = df[0:round(len(df)*.7)]
-    df_test = df[round(len(df)*.7):len(df)]
+    # Split into train test split
+    df_train = df[0:round(len(df)*train)]
+    df_test = df[round(len(df)*train):len(df)]
+    # Scale data
     scaler = MinMaxScaler(feature_range=(0,1))
     scaler_y = MinMaxScaler(feature_range=(0,1))
     trained_scaler = scaler.fit(df_train)
     trained_scaler_y = scaler_y.fit(np.asarray(df_train['TOTAL_LOAD']).reshape(-1,1))
-
     train_norm = trained_scaler.transform(df_train)
     test_norm = trained_scaler.transform(df_test)
-
+    # Create normalized data frames for windowing
     df_norm_train = pd.DataFrame(train_norm, columns = list(df_train))
     df_norm_test = pd.DataFrame(test_norm, columns = list(df_train))
     
-
+    # Window the data to create X and y train and test data
     X_train, y_train = data_prep(df_norm_train, days_back, days_forward, year_back)
     X_test, y_test = data_prep(df_norm_test, days_back, days_forward, year_back)
 
-
+    # Build the model. 1 LSTM layer, 1 dense layer, then a prediction layer
+    # dropout of 0.2 in between layers
     model = Sequential()
     model.add(LSTM(units = 200, activation = 'relu',
                 input_shape = (X_train.shape[1], X_train.shape[2])))
@@ -139,7 +158,7 @@ def build_model(df, days_back = 7, days_forward = 30, year_back = True, train = 
     model.add(Dense(units = 100, activation = 'relu'))
     model.add(Dropout(0.2))
     model.add(Dense(days_forward))
-    #Compile model
+    #Compile and fit model
     model.compile(loss='mse', optimizer='adam')
     early_stop = keras.callbacks.EarlyStopping(monitor = 'loss',
                                                patience = 10)
@@ -147,6 +166,9 @@ def build_model(df, days_back = 7, days_forward = 30, year_back = True, train = 
                         batch_size = 16, 
                         shuffle = False, callbacks = [early_stop])    
     
+    # create predictions, get actuals, evaluate using 
+    # mae and mse for the whole model, and just for the next
+    # 30 days.
     prediction = model.predict(X_test)
     prediction = trained_scaler_y.inverse_transform(prediction)
     actual = trained_scaler_y.inverse_transform(y_test)
@@ -156,12 +178,16 @@ def build_model(df, days_back = 7, days_forward = 30, year_back = True, train = 
 
 def evaluate_prediction(predictions, actual, model_name):
     errors = predictions - actual
+    mse_1 = np.square(errors[len(errors) - 1]).mean()
+    mae_1 = np.abs(errors[len(errors) - 1]).mean()
     mse = np.square(errors).mean()
     rmse = np.sqrt(mse)
     mae = np.abs(errors).mean()
     print(model_name + ':')
-    print('Mean Absolute Error: {:.4f}'.format(mae))
-    print('Mean Square Error: {:.4f}'.format(mse))
+    print('Total Mean Absolute Error: {:.4f}'.format(mae))
+    print('Total Mean Square Error: {:.4f}'.format(mse))
+    print('Mean Absolute Error of 30 days: {:.4f}'.format(mae_1))
+    print('Mean Square Error of 30 days: {:.4f}'.format(mse_1))    
     print('')
 
     
