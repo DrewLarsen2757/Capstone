@@ -12,10 +12,13 @@ start_time = time.time()
 def main():
     # Read data in
     df = pd.read_csv('Full_Data.csv', parse_dates = ['DAY'])
-    days_back = 7
-    days_forward = 30
+    days_back = [7]
+    days_forward = [30]
+    year_back = [False]
+#    days_back = [7, 14, 30]
+#    days_forward = [30, 180]
     train = .7
-    year_back = False
+#    year_back = [True, False]
 
 #################################################
     # control for functions
@@ -114,7 +117,7 @@ def data_prep(df, days_back = 7, days_forward = 30, year_back = True):
             
     return np.array(X).astype('float32'), np.array(y).astype('float32')
     
-def build_model(df, days_back = 7, days_forward = 30, year_back = True, train = .7):
+def build_model(df, days_list = [7], fwd_list = [30], year_list = [True], train = .7):
     """This function finishes preprocessing, scales the data, builds the model and 
     outputs model performance metrics.
 
@@ -126,69 +129,80 @@ def build_model(df, days_back = 7, days_forward = 30, year_back = True, train = 
         Defaults to True.
         train (float, optional): Create train / test split. Defaults to .7.
     """
-    
-    
-    # Finish data preprocessing prior to windowing
-    df = df.drop(columns = ['DAY'])
-    df = df.replace(',', '', regex = True)
-    # Split into train test split
-    df_train = df[0:round(len(df)*train)]
-    df_test = df[round(len(df)*train):len(df)]
-    # Scale data
-    scaler = MinMaxScaler(feature_range=(0,1))
-    scaler_y = MinMaxScaler(feature_range=(0,1))
-    trained_scaler = scaler.fit(df_train)
-    trained_scaler_y = scaler_y.fit(np.asarray(df_train['TOTAL_LOAD']).reshape(-1,1))
-    train_norm = trained_scaler.transform(df_train)
-    test_norm = trained_scaler.transform(df_test)
-    # Create normalized data frames for windowing
-    df_norm_train = pd.DataFrame(train_norm, columns = list(df_train))
-    df_norm_test = pd.DataFrame(test_norm, columns = list(df_train))
-    
-    # Window the data to create X and y train and test data
-    X_train, y_train = data_prep(df_norm_train, days_back, days_forward, year_back)
-    X_test, y_test = data_prep(df_norm_test, days_back, days_forward, year_back)
+    results_list = []
+    for days_forward in fwd_list:    
+        for year_back in year_list:
+            for days_back in days_list:
+                # Finish data preprocessing prior to windowing
+                df = df.drop(columns = ['DAY'])
+                df = df.replace(',', '', regex = True)
+                # Split into train test split
+                df_train = df[0:round(len(df)*train)]
+                df_test = df[round(len(df)*train):len(df)]
+                # Scale data
+                scaler = MinMaxScaler(feature_range=(0,1))
+                scaler_y = MinMaxScaler(feature_range=(0,1))
+                trained_scaler = scaler.fit(df_train)
+                trained_scaler_y = scaler_y.fit(np.asarray(df_train['TOTAL_LOAD']).reshape(-1,1))
+                train_norm = trained_scaler.transform(df_train)
+                test_norm = trained_scaler.transform(df_test)
+                # Create normalized data frames for windowing
+                df_norm_train = pd.DataFrame(train_norm, columns = list(df_train))
+                df_norm_test = pd.DataFrame(test_norm, columns = list(df_train))
+                
+                # Window the data to create X and y train and test data
+                X_train, y_train = data_prep(df_norm_train, days_back, days_forward, year_back)
+                X_test, y_test = data_prep(df_norm_test, days_back, days_forward, year_back)
 
-    # Build the model. 1 LSTM layer, 1 dense layer, then a prediction layer
-    # dropout of 0.2 in between layers
-    model = Sequential()
-    model.add(LSTM(units = 200, activation = 'relu',
-                input_shape = (X_train.shape[1], X_train.shape[2])))
-    model.add(Dropout(0.2))
-    model.add(Dense(units = 100, activation = 'relu'))
-    model.add(Dropout(0.2))
-    model.add(Dense(days_forward))
-    #Compile and fit model
-    model.compile(loss='mse', optimizer='adam')
-    early_stop = keras.callbacks.EarlyStopping(monitor = 'loss',
-                                               patience = 10)
-    fit_model = model.fit(X_train, y_train, epochs = 10000,  
-                        batch_size = 16, 
-                        shuffle = False, callbacks = [early_stop])    
-    
-    # create predictions, get actuals, evaluate using 
-    # mae and mse for the whole model, and just for the next
-    # 30 days.
-    prediction = model.predict(X_test)
-    prediction = trained_scaler_y.inverse_transform(prediction)
-    actual = trained_scaler_y.inverse_transform(y_test)
-    evaluate_prediction(prediction, actual, 'LSTM')
+                # Build the model. 1 LSTM layer, 1 dense layer, then a prediction layer
+                # dropout of 0.2 in between layers
+                
+                for nodes in [[64,32], [128, 64], [256, 128]]:
+                    for x in range(5):
+                        model = Sequential()
+                        model.add(LSTM(units = nodes[0], activation = 'relu',
+                                    input_shape = (X_train.shape[1], X_train.shape[2])))
+                        model.add(Dropout(0.2))
+                        model.add(Dense(units = nodes[1], activation = 'relu'))
+                        model.add(Dropout(0.2))
+                        model.add(Dense(days_forward))
+                        #Compile and fit model
+                        model.compile(loss='mse', optimizer='adam')
+                        early_stop = keras.callbacks.EarlyStopping(monitor = 'loss',
+                                                                patience = 10)
+                        fit_model = model.fit(X_train, y_train, epochs = 10000,  
+                                            batch_size = 32, 
+                                            shuffle = False, callbacks = [early_stop])    
+                        
+                        # create predictions, get actuals, evaluate using 
+                        # mae and mse for the whole model, and just for the next
+                        # 30 days.
+                        prediction_test = model.predict(X_test)
+                        prediction_test = trained_scaler_y.inverse_transform(prediction_test)
+                        actual_test = trained_scaler_y.inverse_transform(y_test)
+                        test_mse = evaluate_prediction(prediction_test, actual_test)
 
-    print('done')
+                        prediction_train = model.predict(X_train)
+                        prediction_train = trained_scaler_y.inverse_transform(prediction_train)
+                        actual_train = trained_scaler_y.inverse_transform(y_train)
+                        train_mse = evaluate_prediction(prediction_train, actual_train)                        
+                        
+                        
+                        results_list.append({'days_forward':days_forward, 'days_back':days_back, 'year_back':year_back,\
+                            'nodes1':nodes[0], 'nodes2':nodes[1], 'x':x, 'train_mse':train_mse, 'test_mse':test_mse})
+                        print(results_list)
+    results_df = pd.DataFrame(results_list)
+    results_df.to_csv('resultsdf.csv')
 
-def evaluate_prediction(predictions, actual, model_name):
+def evaluate_prediction(predictions, actual):
     errors = predictions - actual
     mse_1 = np.square(errors[len(errors) - 1]).mean()
     mae_1 = np.abs(errors[len(errors) - 1]).mean()
     mse = np.square(errors).mean()
     rmse = np.sqrt(mse)
     mae = np.abs(errors).mean()
-    print(model_name + ':')
-    print('Total Mean Absolute Error: {:.4f}'.format(mae))
-    print('Total Mean Square Error: {:.4f}'.format(mse))
-    print('Mean Absolute Error of 30 days: {:.4f}'.format(mae_1))
-    print('Mean Square Error of 30 days: {:.4f}'.format(mse_1))    
-    print('')
+    
+    return mse
 
     
 if __name__ == '__main__':
