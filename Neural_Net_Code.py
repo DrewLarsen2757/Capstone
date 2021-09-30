@@ -19,13 +19,15 @@ def main():
 #    days_back = [7]
 #    days_forward = [30]
 #    year_back = [False]
-    days_back = [7, 14]
-    days_forward = [7, 151]
-    target_list = ['COAST_LOAD','EAST_LOAD','FAR_WEST_LOAD','NORTH_LOAD',
-                   'NORTH_CENTRAL_LOAD','SOUTHERN_LOAD','SOUTH_CENTRAL_LOAD',
-                   'WEST_LOAD', 'GEN_TOTAL']
-    train = .7
-    year_back = [True, False]
+#    days_back = [7, 14]
+#    days_forward = [7, 151]
+#    target_list = ['COAST_LOAD','EAST_LOAD','FAR_WEST_LOAD','NORTH_LOAD',
+#                   'NORTH_CENTRAL_LOAD','SOUTHERN_LOAD','SOUTH_CENTRAL_LOAD',
+#                   'WEST_LOAD', 'GEN_TOTAL']
+#    train = .7
+#    year_back = [True, False]
+
+#   best results dictionaries
     best_results_short = {'COAST_LOAD':{'days_forward':7, 'days_back':14,'year_back':False, 'nodes1':64, 'nodes2':32, 'dense_layer':True},
                     'EAST_LOAD':{'days_forward':7, 'days_back':7,'year_back':True, 'nodes1':256, 'nodes2':128, 'dense_layer':False},
                     'FAR_WEST_LOAD':{'days_forward':7, 'days_back':7,'year_back':False, 'nodes1':128, 'nodes2':64, 'dense_layer':False},
@@ -47,7 +49,7 @@ def main():
                     'GEN_TOTAL':{'days_forward':151, 'days_back':14,'year_back':True, 'nodes1':64, 'nodes2':32, 'dense_layer':True}}
 
 #################################################
-    # control for functions
+    # control for functions. 
     clean_df, df_test = data_clean(df)
 #    grid_search(clean_df, target_list, days_back, days_forward, year_back, train)
     final_model(clean_df, df_test, best_results_short, best_results_long)
@@ -169,13 +171,16 @@ def final_model(df, df_eval, best_results_short, best_results_long):
     # Split into train test split
     df_train = df[0:round(len(df)*.7)]
     df_test = df[round(len(df)*.7):len(df)]
-    # Scale data
+    # create Scalers for data data
     scaler = MinMaxScaler(feature_range=(0,1))
     scaler_y = MinMaxScaler(feature_range=(0,1))
     trained_scaler = scaler.fit(df_train)
+    # lists to hold results
     results_list = []
     daily_results = []
+# run NN for short term results
     for key in best_results_short.keys():
+        # scale test and train data
         trained_scaler_y = scaler_y.fit(np.asarray(df_train[key]).reshape(-1,1))
         train_norm = trained_scaler.transform(df_train)
         test_norm = trained_scaler.transform(df_test)
@@ -187,7 +192,8 @@ def final_model(df, df_eval, best_results_short, best_results_long):
         X_train, y_train = data_prep(df_norm_train, key, best_results_short[key]['days_back'], best_results_short[key]['days_forward'], best_results_short[key]['year_back'])
         X_test, y_test = data_prep(df_norm_test, key, best_results_short[key]['days_back'], best_results_short[key]['days_forward'], best_results_short[key]['year_back'])
 
-        # Build the model. 1 LSTM layer, 1 dense layer, then a prediction layer
+        # Build the model. 1 LSTM layer, 1 dense layer (if necessary), 
+        # then a prediction layer
         # dropout of 0.2 in between layers
         model = Sequential()
         model.add(LSTM(units = best_results_short[key]['nodes1'], activation = 'relu',
@@ -217,7 +223,8 @@ def final_model(df, df_eval, best_results_short, best_results_long):
         prediction_train = trained_scaler_y.inverse_transform(prediction_train)
         actual_train = trained_scaler_y.inverse_transform(y_train)
         train_mse = evaluate_prediction(prediction_train, actual_train)                        
-        # add final mse: evaluation data.
+        # evaluation data dataframe creation and scaling. 
+        # this is for 1/1/2021 - 1/7/2021
         X_eval_norm = df_eval[(dt.datetime.strptime('2021-01-01', '%Y-%m-%d') - 
                               dt.timedelta(days = best_results_short[key]['days_back']) <= 
                               df_eval['DAY']) & (df_eval['DAY'] < dt.datetime.strptime('2021-01-01', '%Y-%m-%d'))]
@@ -230,6 +237,8 @@ def final_model(df, df_eval, best_results_short, best_results_long):
         y_eval_norm = trained_scaler.transform(y_eval_norm)
         y_eval_norm = pd.DataFrame(y_eval_norm, columns = list(df_train))
         y_eval_norm = y_eval_norm[key]
+        # evaluation data dataframe creation and scaling. 
+        # this is for 2/13/2021 - 2/19/2021
         X_eval_storm = df_eval[(dt.datetime.strptime('2021-02-13', '%Y-%m-%d') - 
                               dt.timedelta(days = best_results_short[key]['days_back']) <= 
                               df_eval['DAY']) & (df_eval['DAY'] < dt.datetime.strptime('2021-02-13', '%Y-%m-%d'))]
@@ -242,6 +251,9 @@ def final_model(df, df_eval, best_results_short, best_results_long):
         y_eval_storm = trained_scaler.transform(y_eval_storm)
         y_eval_storm = pd.DataFrame(y_eval_storm, columns = list(df_train))
         y_eval_storm = y_eval_storm[key]  
+        
+        # Turn evaluation data into numpy arrays and expand dimensions
+        # for prediction
         X_eval_norm = np.array(X_eval_norm).astype('float32')
         y_eval_norm = np.array(y_eval_norm).astype('float32')
         X_eval_storm = np.array(X_eval_storm).astype('float32')
@@ -251,20 +263,26 @@ def final_model(df, df_eval, best_results_short, best_results_long):
         X_eval_storm = np.expand_dims(X_eval_storm, axis = 0)
         y_eval_storm = np.expand_dims(y_eval_storm, axis = 0)
         
+        # create predictions with evaluation data: 
+        # this is for 1/1/2021 - 1/7/2021
         prediction_norm = model.predict(X_eval_norm)
         preds_norm = trained_scaler_y.inverse_transform(prediction_norm)
         actual_norm = trained_scaler_y.inverse_transform(y_eval_norm)
         norm_mse = evaluate_prediction(preds_norm, actual_norm)
 
+        # create predictions with evaluation data: 
+        # this is for 2/13/2021 - 2/19/2021
         prediction_storm = model.predict(X_eval_storm)
         preds_storm = trained_scaler_y.inverse_transform(prediction_storm)
         actual_storm = trained_scaler_y.inverse_transform(y_eval_storm)
         storm_mse = evaluate_prediction(preds_storm, actual_storm) 
         
+        # put results into dictionary lists
         daily_results.append({'target':key, 'length':'short', 'normal_preds':preds_norm, 'storm_preds':preds_storm})         
         results_list.append({'target':key, 'length':'short', 'train_mse':train_mse, 'test_mse':test_mse, 'norm_ase':norm_mse, 'storm_ase':storm_mse})
         print(results_list)
 
+# run NN for long term prediction
     for key in best_results_long.keys():
         trained_scaler_y = scaler_y.fit(np.asarray(df_train[key]).reshape(-1,1))
         train_norm = trained_scaler.transform(df_train)
@@ -307,9 +325,9 @@ def final_model(df, df_eval, best_results_short, best_results_long):
         prediction_train = trained_scaler_y.inverse_transform(prediction_train)
         actual_train = trained_scaler_y.inverse_transform(y_train)
         train_mse = evaluate_prediction(prediction_train, actual_train)                        
-        # add final mse: evaluation data.
         
-        # add final mse: evaluation data.
+        # evaluation data dataframe creation and scaling. 
+        # this is for 1/1/2021 - 5/31/2021
         X_eval_long = df_eval[(dt.datetime.strptime('2021-01-01', '%Y-%m-%d') - 
                               dt.timedelta(days = best_results_long[key]['days_back']) <= 
                               df_eval['DAY']) & (df_eval['DAY'] < dt.datetime.strptime('2021-01-01', '%Y-%m-%d'))]
@@ -322,26 +340,34 @@ def final_model(df, df_eval, best_results_short, best_results_long):
         y_eval_long = trained_scaler.transform(y_eval_long)
         y_eval_long = pd.DataFrame(y_eval_long, columns = list(df_train))
         y_eval_long = y_eval_long[key]
+        
+        # Turn evaluation data into numpy arrays and expand dimensions
+        # for prediction        
         X_eval_long = np.array(X_eval_long).astype('float32')
         y_eval_long = np.array(y_eval_long).astype('float32') 
         X_eval_long = np.expand_dims(X_eval_long, axis = 0)
         y_eval_long = np.expand_dims(y_eval_long, axis = 0)  
-        
+    
+        # create predictions with evaluation data: 
+        # this is for 2/13/2021 - 2/19/2021
         prediction_long = model.predict(X_eval_long)
         preds_long = trained_scaler_y.inverse_transform(prediction_long)
         actual_long = trained_scaler_y.inverse_transform(y_eval_long)
         long_mse = evaluate_prediction(preds_long, actual_long) 
 
+        # put results into dictionary list
         daily_results.append({'target':key, 'length':'long', 'long_preds':preds_long})         
         results_list.append({'target':key, 'length':'long', 'train_mse':train_mse, 'test_mse':test_mse, 'long_ase':long_mse})
         print(results_list)
-        
+    # save results to csv
     results_df = pd.DataFrame(results_list)
     daily_df = pd.DataFrame(daily_results)
     results_df.to_csv('eval_resultsdf.csv')
     daily_df.to_csv('daily_df.csv')
 
 def evaluate_prediction(predictions, actual):
+    # various evaluation metrics
+    # MSE is the one that ends up being used
     errors = predictions - actual
     mse_1 = np.square(errors[len(errors) - 1]).mean()
     mae_1 = np.abs(errors[len(errors) - 1]).mean()
@@ -411,11 +437,13 @@ def grid_search(df, target_list, days_list, fwd_list, year_list, train):
                                 actual_train = trained_scaler_y.inverse_transform(y_train)
                                 train_mse = evaluate_prediction(prediction_train, actual_train)                        
                                 
-                                
+                                # put results into results list of dictionaries
                                 results_list.append({'target':target, 'days_forward':days_forward, 'days_back':days_back, 
                                                     'year_back':year_back, 'nodes1':nodes[0], 'nodes2':nodes[1], 'x':x,
                                                     'dense_layer':dense_layer, 'train_mse':train_mse, 'test_mse':test_mse})
                                 print(results_list)
+                                
+        # turn results dictionary  into dataframe
         results_df = pd.DataFrame(results_list)
         results_df.to_csv('resultsdf_new.csv')
     
